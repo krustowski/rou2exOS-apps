@@ -1,5 +1,10 @@
 /* Linker script for a basic C++ project memory layout */
 
+PHDRS {
+  text PT_LOAD FLAGS(5); /* R+X */
+  data PT_LOAD FLAGS(6); /* R+W */
+}
+
 ENTRY(main)
 
 MEMORY
@@ -16,14 +21,14 @@ SECTIONS
     *(.text*)
     *(.rodata*)
     _etext = .;
-  } > FLASH
+  } :text
 
   .data : AT (ADDR(.text) + SIZEOF(.text))
   {
     _sdata = .;
     *(.data*)
     _edata = .;
-  } > RAM
+  } :data
 
   .bss :
   {
@@ -31,7 +36,7 @@ SECTIONS
     *(.bss*)
     *(COMMON)
     _ebss = .;
-  } > RAM
+  } :data
 
   /* Stack and heap can be defined here if needed */
   _end = .;

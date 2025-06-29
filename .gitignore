@@ -2,3 +2,8 @@
 /app.bin
 /a.out
 /app.elf
+
+*.o
+*.elf
+*.bin
+*.img
