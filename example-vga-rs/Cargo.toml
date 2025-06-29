@@ -1,0 +1,19 @@
+[package]
+name = "app"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["staticlib"]  # Will produce .a file, or use "cdylib" for .o/.bin
+
+[dependencies]
+
+[profile.release]
+panic = "abort"
+
+#[[bin]]
+#name = "app"
+#path = "src/lib.rs"
+#test = false
+#doctest = false
+#bench = false
