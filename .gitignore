@@ -3,6 +3,7 @@
 /a.out
 /app.elf
 /*/target/*
+/*/a.out
 
 *.o
 *.elf

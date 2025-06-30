@@ -1,11 +1,10 @@
 /* Linker script for a basic C++ project memory layout */
+ENTRY(main)
 
 PHDRS {
   text PT_LOAD FLAGS(5); /* R+X */
   data PT_LOAD FLAGS(6); /* R+W */
 }
-
-ENTRY(main)
 
 MEMORY
 {
@@ -18,7 +17,8 @@ SECTIONS
   .text :
   {
     /*KEEP(*(.isr_vector))*/
-    *(.text*)
+    KEEP(*(.text.main))
+    *(.text.)
     *(.rodata*)
     _etext = .;
   } :text
@@ -40,4 +40,6 @@ SECTIONS
 
   /* Stack and heap can be defined here if needed */
   _end = .;
+
+
 }
