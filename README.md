@@ -5,7 +5,7 @@
 How to compile and link a C++ source (`print.cpp`) to a flat binary (`print.bin`):
 
 ```
-gcc -Xlinker "-T./linker.ld" -nostdinc -nostdlib -ffreestanding -I includes print.cpp
+gcc -Xlinker "-T./linker.ld" -nostdinc -nostdlib -ffreestanding -I include print.cpp
 llvm-objcopy -O binary a.out print.bin 
 ```
 

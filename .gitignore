@@ -2,6 +2,7 @@
 /app.bin
 /a.out
 /app.elf
+/*/target/*
 
 *.o
 *.elf
