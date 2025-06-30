@@ -12,10 +12,14 @@ extern "C" int64_t syscall(int64_t number, int64_t arg1, int64_t arg2, int64_t a
     return ret;
 }
 
+extern char stack_top[];
+
 extern "C" int64_t main()
 {
+    asm volatile ("mov %0, %%rsp" :: "r"(stack_top));
+
     int64_t len = 0;
-    const char *s = "Hello from C++!\n";
+    volatile const char *s = "Hello from C++!\n";
 
     while (s[len]) ++len;
 

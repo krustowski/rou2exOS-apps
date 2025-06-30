@@ -6,14 +6,10 @@ PHDRS {
   data PT_LOAD FLAGS(6); /* R+W */
 }
 
-MEMORY
-{
-  FLASH (rx)  : ORIGIN = 0x00000000, LENGTH = 512K
-  RAM   (rwx) : ORIGIN = 0x20000000, LENGTH = 128K
-}
-
 SECTIONS
 {
+  . = 0x600000;
+
   .text :
   {
     /*KEEP(*(.isr_vector))*/
@@ -40,4 +36,12 @@ SECTIONS
 
   /* Stack and heap can be defined here if needed */
   _end = .;
+
+  .stack : 
+  {
+    . = ALIGN(16);
+    stack_bottom = .;
+    . += 0x10000; /* 64 KiB stack */
+    stack_top = .;
+  } :data
 }
