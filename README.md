@@ -1,60 +1,49 @@
 # rou2exOS apps
 
-## C++
+An application suite for the [rou2exOS kernel](https://github.com/krustowski/rou2exOS). All aplications must follow the syscall ABI specification. 
 
-How to compile and link a C++ source (`print.cpp`) to a flat binary (`print.bin`):
+Languages currently implementing (parts) of ABI:
 
-```
-gcc -Xlinker "-T./linker.ld" -nostdinc -nostdlib -ffreestanding -I include print.cpp
-llvm-objcopy -O binary a.out print.bin 
-```
++ C++
++ Go (using TinyGo, WIP)
++ NASM 
++ Rust
 
-`linker.ld`
+Each listed language has its workspace in a related directory in the repository root. Each implementation example should include:
 
-```
-/* Linker script for a basic C++ project memory layout */
++ linker script (`linker.ld`)
++ Makefile
++ README.md (optional)
++ the source code file(s)
 
-ENTRY(main)
+The linker script should ensure proper memory alignment with the `.text` section at the beginning.
 
-MEMORY
-{
-  FLASH (rx)  : ORIGIN = 0x00000000, LENGTH = 512K
-  RAM   (rwx) : ORIGIN = 0x20000000, LENGTH = 128K
-}
+## Executables
 
-SECTIONS
-{
-  .text :
-  {
-    /*KEEP(*(.isr_vector))*/
-    *(.text*)
-    *(.rodata*)
-    _etext = .;
-  } > FLASH
+At the moment, all executables (elf-x86-64) have to be converted into a flat memory binary file. ELF files cannot be loaded directly yet. See tooling below for more. 
 
-  .data : AT (ADDR(.text) + SIZEOF(.text))
-  {
-    _sdata = .;
-    *(.data*)
-    _edata = .;
-  } > RAM
-
-  .bss :
-  {
-    _sbss = .;
-    *(.bss*)
-    *(COMMON)
-    _ebss = .;
-  } > RAM
-
-  /* Stack and heap can be defined here if needed */
-  _end = .;
-}
+To run a binary in the `r2` shell, it has to be loaded onto a floppy image with FAT12 filesystem (see the root Makefile). When it's loaded, boot the system using attached ISO image and the floppy image:
 
 ```
+qemu-system-x86_64 -boot d -m 2G -cdrom r2.iso -fda fat.img
+```
 
-## NASM
+In the shell, ensure the file is there and then just load it and run (do not include the binary extension):
 
 ```
-nasm -f bin -o print.bin print.asm
+dir 
+run PRINT
 ```
+
+## Development Tools
+
+Tooling strictly depends on the selected language. However, these tools are required to be able to compile, link, convert, and debug the source code:
+
++ mtools
++ llvm tools 
++ lld
++ qemu
++ gnumake
++ gcc (cross compiler)
++ nasm 
+
