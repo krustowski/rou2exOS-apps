@@ -40,6 +40,4 @@ SECTIONS
 
   /* Stack and heap can be defined here if needed */
   _end = .;
-
-
 }
