@@ -1,9 +1,10 @@
 build:
 	@docker run --rm -v $(shell pwd):/src tinygo/tinygo:0.38.0 tinygo build \
-		-o /src/hello.o \
+		-o /src/hello.elf \
 		-scheduler=none \
 		-no-debug \
+		-opt=z \
 		-gc=none \
-		-ldflags "-extldflags=-T./linker.ld" \
+		-ldflags "-extldflags=-T/src/linker.ld" \
 		/src/hello.go
-	@llvm-objcopy -O binary hello.o hello.bin 
+	@llvm-objcopy -O binary hello.elf hello.bin 

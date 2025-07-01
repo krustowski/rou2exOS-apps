@@ -1,12 +1,12 @@
-ENTRY(_main)
+ENTRY(main)
 
 SECTIONS {
   /* Load code at this address in physical memory */
   . = 0x600000;
 
   .text : {
-    KEEP(*(.text._main)) /* keep TinyGo entry point if named */
-    *(.text*)             /* all .text */
+    KEEP(*(.text.main))
+    *(.text*)             
   }
 
   .rodata : {
