@@ -23,7 +23,7 @@ extern "C" int64_t main()
 
     while (s[len]) ++len;
 
-    int64_t ret = syscall(ScSysinfo, (int64_t)s, len, 0);
+    int64_t ret = syscall(ScPrints, (int64_t)s, len, 0);
 
     return ret;
 }
