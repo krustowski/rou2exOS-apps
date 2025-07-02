@@ -12,19 +12,54 @@ extern "C" int64_t syscall(int64_t number, int64_t arg1, int64_t arg2, int64_t a
     return ret;
 }
 
-extern char stack_top[];
+int64_t print(const char *str) 
+{
+	int64_t len = 0;
+	while (str[len]) ++len;
+
+	if (len > 0)
+	{
+	    	if (syscall(ScPrints, (int64_t)str, len, 0))
+		{
+			return 0;
+		}
+	}
+
+	return len;
+}
+
+int64_t read_file(const char *name, char *buffer)
+{
+	int64_t len = 0;
+	while (name[len]) ++len;
+
+	if (len > 0)
+	{
+		if (syscall(ScReadFile, (int64_t)name, (int64_t)buffer, 0))
+		{
+			return 0;
+		}
+
+		return 1;
+	}
+
+	return 0;
+}
 
 extern "C" int64_t main()
 {
-    asm volatile ("mov %0, %%rsp" :: "r"(stack_top));
+    const char *s = "Hello from C++!\n";
 
-    int64_t len = 0;
-    volatile const char *s = "Hello from C++!\n";
+    print(s);
 
-    while (s[len]) ++len;
+    const char *filename = "HELLO.TXT";
+    char buffer[512];
 
-    int64_t ret = syscall(ScPrints, (int64_t)s, len, 0);
+    if (read_file(filename, buffer))
+    {
+	    print(buffer);
+    }
 
-    return ret;
+    return 111;
 }
 
