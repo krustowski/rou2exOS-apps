@@ -4,22 +4,24 @@ SECTIONS {
   /* Load code at this address in physical memory */
   . = 0x600000;
 
-  .text : {
+  .text : ALIGN(4K) {
     KEEP(*(.text.main))
     *(.text*)             
   }
 
-  .rodata : {
+  .rodata : ALIGN(4K) {
     *(.rodata*)
   }
 
-  .data : {
+  .data : ALIGN(4K) {
     *(.data*)
   }
 
-  .bss : {
+  .bss : ALIGN(4K) {
+    __bss_start = .;
     *(.bss*)
     *(COMMON)
+    __bss_end = .;
   }
 }
 
