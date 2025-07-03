@@ -12,6 +12,14 @@ extern "C" int64_t syscall(int64_t number, int64_t arg1, int64_t arg2, int64_t a
     return ret;
 }
 
+void exit(int64_t code)
+{
+	syscall(ScNull, code, 0, 0);
+
+	for (;;)
+	{}
+}
+
 int64_t print(const char *str) 
 {
 	int64_t len = 0;
@@ -46,7 +54,7 @@ int64_t read_file(const char *name, char *buffer)
 	return 0;
 }
 
-extern "C" int64_t main()
+extern "C" void main()
 {
     const char *s = "Hello from C++!\n";
 
@@ -60,6 +68,6 @@ extern "C" int64_t main()
 	    print(buffer);
     }
 
-    return 111;
+    exit(999);
 }
 
