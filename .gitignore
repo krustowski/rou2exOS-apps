@@ -2,7 +2,7 @@
 /app.bin
 /a.out
 /app.elf
-/*/target/*
+/rust/*/target/*
 /*/a.out
 
 *.o
