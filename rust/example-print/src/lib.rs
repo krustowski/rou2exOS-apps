@@ -4,33 +4,30 @@
 use core::panic::PanicInfo;
 
 #[no_mangle]
-#[unsafe(link_section = ".text.entry")]
-pub extern "C" fn entry(arg: u32) -> u32 {
-    /*let vga = 0xb8000 as *mut u16;
-    unsafe {
-        *vga.offset(0) = 0x1E41; // 'A'
-        *vga.offset(1) = 0x1E30 + (arg as u16); // '0' + arg
-    }*/
+pub extern "C" fn entry(arg: u32) -> ! {
+    let s = *b"Hello, interrupt!\n";
 
-    let s = b"Hello, interrupt!\n";
-    let len = s.len();
+    syscall(0x10, s.as_ptr() as u64, s.len() as u64);
+    syscall(0x00, 0 as u64, 0 as u64);
 
-    return syscall(1, s.as_ptr() as u64, len as u64) as u32
+    loop {}
 }
 
-#[inline(always)]
-pub fn syscall(n: u64, a1: u64, a2: u64) -> u64 {
+#[unsafe(no_mangle)]
+pub fn syscall(n: u64, a1: u64, a2: u64) -> () {
     let ret: u64;
     unsafe {
         core::arch::asm!(
+            "mov rdi, {0}",
+            "mov rsi, {1}",
+            "mov rax, {2}",
             "int 0x7f",
-            inlateout("rax") n => ret,
-            in("rdi") a1,
-            in("rsi") a2,
+            in(reg) a1,
+            in(reg) a2,
+            in(reg) n,
             options(nostack),
         );
     }
-    ret
 }
 
 #[panic_handler]

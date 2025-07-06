@@ -2,11 +2,11 @@ ENTRY(entry)
 
 SECTIONS
 {
-  . = 0x000000;
+  . = 0x600000;
 
   .text : {
-    KEEP(*(.text.startup))     /* explicitly keep entry function */
-    *(.text*)                /* rest of text */
+    KEEP(*(.text.entry))     
+    *(.text*)                
   }
 
   .rodata : {
