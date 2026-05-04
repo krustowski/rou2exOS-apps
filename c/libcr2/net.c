@@ -122,10 +122,13 @@ static int eth_drv_recv(uint8_t *buf, uint32_t maxlen) {
             return 0;
         const ArpPkt_T *arp = (const ArpPkt_T *)(eth_drv_frame_buf + ETH_HDR_LEN);
         if (htons(arp->oper) == 1 && memcmp(arp->tpa, eth_my_ip, 4) == 0) {
+            /* ARP request for our IP — reply and learn sender */
             eth_arp_cache_update(arp->spa, eth->src);
             eth_send_arp_reply(eth, arp);
+        } else if (htons(arp->oper) == 2 && memcmp(arp->tha, eth_my_mac, 6) == 0) {
+            /* ARP reply to our request — learn sender's MAC */
+            eth_arp_cache_update(arp->spa, eth->src);
         }
-
         return 0;
     }
 
@@ -590,6 +593,7 @@ void on_tcp_packet(const uint8_t src_ip[4], const uint8_t dst_ip[4], TcpHeader_T
 
                 s->rx_len = data_len;
                 s->ack_num = tcp_header->seq_num + data_len;
+                send_tcp_packet(s, 0, 0, TCP_FLAG_ACK);
             }
 
             if (flags & TCP_FLAG_FIN) {
