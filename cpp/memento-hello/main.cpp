@@ -46,9 +46,30 @@ extern "C" {
     } __attribute__((packed));
     long list_dir_path(const unsigned char* path, VfsDirEntry_T* buf);
 
+    // ScReadFile (0x20)
+    long read_file(const unsigned char* name, unsigned char* buf);
+
+    // ScChdir (0x2E)
+    long chdir(const unsigned char* path);
+
     // Heap checkpoint/restore for the Desktop navigation loop
     unsigned long r2_heap_checkpoint();
     void          r2_heap_restore(unsigned long cp);
+
+    long run_elf(const unsigned char* name, const unsigned char* args, unsigned char* pid);
+    void sleep_ms(unsigned long long ms);
+
+    // ScSysInfo (0x01) — system config read/write
+    struct SysInfo_T {
+        unsigned char  system_name[32];
+        unsigned char  system_user[32];
+        unsigned char  system_path[32];
+        unsigned char  system_version[8];
+        unsigned int   system_path_cluster;
+        unsigned int   system_uptime;
+        unsigned char  ip_addr[4];
+    } __attribute__((packed));
+    long read_sysinfo(SysInfo_T* sysinfo);
 }
 #endif
 
@@ -105,9 +126,89 @@ private:
     }
 };
 
-// 
+// Wallpaper painted first; every window then draws on top of it.
+// 2-colour VGA blit: R+G+B > 300 → white (palette 15), else → dark blue (1).
+// Canvas: 256×160 px.  At DPI=86: W≈285 Coord, H≈178 Coord.
+// Trunk is drawn bright (white) in the sky and dark (silhouette) on the beach.
+static void drawWallpaper(PlatformDrawingContext* dc, PlatformBitmap* target) {
+    static PlatformColor* lit = nullptr;  // lum > 300 → white
+    static PlatformColor* dk  = nullptr;  // lum ≤ 300 → dark blue
+
+    if (!lit) lit = dc->CreateColor(0xFFD0D0F8, nullptr, nullptr);
+    if (!dk)  dk  = dc->CreateColor(0xFF050510, nullptr, nullptr);
+    if (!lit) return;
+
+    const Coord W = target->GetWidth();
+    const Coord H = target->GetHeight();
+
+    // ── Stars ────────────────────────────────────────────────────────────────
+    static const Coord sx[] = { 20, 55, 95, 150, 35, 80, 190, 245 };
+    static const Coord sy[] = { 12,  8, 20,  10, 35, 28,   8,  22 };
+    for (int i = 0; i < 8; i++)
+        target->FillRect(sx[i], sy[i], 2, 2, lit, false);
+
+    // Moon — top-right
+    target->FillRect(W - 30, 12, 9, 6, lit, false);
+
+    // ── Sea horizon line ─────────────────────────────────────────────────────
+    target->FillRect(0, H - 55, W, 1, lit, false);
+
+    // ── Small waves left of island ───────────────────────────────────────────
+    target->FillRect(10,  H - 52, 22, 2, lit, false);
+    target->FillRect(45,  H - 50, 18, 2, lit, false);
+    target->FillRect(80,  H - 53, 24, 2, lit, false);
+
+    // ── Sandy beach — bright oval, right-aligned ─────────────────────────────
+    target->FillRect(180, H - 52, W - 183, 4, lit, false);  // top
+    target->FillRect(170, H - 48, W - 173, 7, lit, false);  // upper body
+    target->FillRect(165, H - 41, W - 168, 9, lit, false);  // widest
+    target->FillRect(170, H - 32, W - 173, 7, lit, false);  // lower body
+    target->FillRect(180, H - 25, W - 183, 4, lit, false);  // bottom edge
+
+    // ── Palm trunk ───────────────────────────────────────────────────────────
+    // Sky zone (bright against dark sky): trunk top down to horizon
+    target->FillRect(258, H - 108, 3, 56, lit, false);
+    // Beach zone (dark silhouette on bright sand): horizon down to trunk base
+    target->FillRect(258, H -  52, 3, 23, dk,  false);
+
+    // ── Palm fronds (bright against dark sky) ────────────────────────────────
+    // Left droop — 6 steps going left-and-down from crown
+    target->FillRect(250, H - 108, 5, 3, lit, false);
+    target->FillRect(242, H - 105, 5, 3, lit, false);
+    target->FillRect(233, H - 101, 5, 3, lit, false);
+    target->FillRect(223, H -  97, 5, 3, lit, false);
+    target->FillRect(213, H -  93, 5, 3, lit, false);
+    target->FillRect(203, H -  89, 5, 3, lit, false);
+
+    // Right droop — 6 steps going right-and-down (clips off canvas edge, that's fine)
+    target->FillRect(261, H - 108, 5, 3, lit, false);
+    target->FillRect(269, H - 105, 5, 3, lit, false);
+    target->FillRect(278, H - 101, 5, 3, lit, false);
+    target->FillRect(288, H -  97, 5, 3, lit, false);
+    target->FillRect(298, H -  93, 5, 3, lit, false);
+    target->FillRect(308, H -  89, 5, 3, lit, false);
+
+    // Upper-left frond — rises left from crown
+    target->FillRect(250, H - 111, 5, 3, lit, false);
+    target->FillRect(242, H - 114, 5, 3, lit, false);
+    target->FillRect(233, H - 117, 5, 3, lit, false);
+    target->FillRect(224, H - 119, 5, 3, lit, false);
+
+    // Upper-right frond — rises right from crown (clips are OK)
+    target->FillRect(262, H - 111, 5, 3, lit, false);
+    target->FillRect(270, H - 114, 5, 3, lit, false);
+    target->FillRect(279, H - 117, 5, 3, lit, false);
+    target->FillRect(288, H - 119, 5, 3, lit, false);
+
+    // Top frond — straight up from crown
+    target->FillRect(255, H - 112, 4, 4, lit, false);
+    target->FillRect(254, H - 116, 4, 4, lit, false);
+    target->FillRect(253, H - 120, 4, 4, lit, false);
+}
+
+//
 // Window 2 — Login dialog (username + password)
-// 
+//
 
 class LoginWindow {
 public:
@@ -236,19 +337,19 @@ private:
         Coord H = target->GetHeight();
 
         target->FillRect(0, 0, W, H, dark, false);
+        drawWallpaper(dc, target);
 
         // Taskbar
         target->FillRect(0, H - 14, W, 1,  dark,  false);
         target->FillRect(0, H - 13, W, 13, light, false);
 
-        // Dialog: outer border + light interior
-        // outer x=40..280, y=52..148  inner x=42..278, y=54..146
-        target->FillRect(40, 52, 240, 96, dark,  false);
-        target->FillRect(42, 54, 236, 92, light, false);
+        // Dialog: left-aligned, 185 Coord wide  (x=40..225, inner x=42..223)
+        target->FillRect(40, 52, 185, 96, dark,  false);
+        target->FillRect(42, 54, 181, 92, light, false);
 
         // Title bar separator at y=68, close button
-        target->FillRect(42, 68, 236, 1,  dark, false);
-        target->FillRect(266, 57, 10, 8,  dark, false);
+        target->FillRect(42,  68, 181,  1, dark, false);
+        target->FillRect(211, 57,  10,  8, dark, false);
 
         PlatformDrawTextOptions opts{};
         opts.font            = font;
@@ -256,7 +357,7 @@ private:
         opts.horizontalAlign = PlatformAlign::Middle;
         opts.verticalAlign   = PlatformAlign::Middle;
 
-        target->DrawText(42,  54, 220, 14, "Login",         &opts, false);
+        target->DrawText(42, 54, 165, 14, "Login",         &opts, false);
         target->DrawText(0, H - 13, W, 13, "Login  -  r2", &opts, false);
 
         // Row labels (left-aligned)
@@ -264,13 +365,13 @@ private:
         target->DrawText(50, 74, 58, 14, "Login:",    &opts, false);
         target->DrawText(50, 93, 58, 14, "Password:", &opts, false);
 
-        // Input fields
-        DrawInputField(target, 110, 74, 160, 14, loginBuf, loginLen, focus == 0, false);
-        DrawInputField(target, 110, 93, 160, 14, passBuf,  passLen,  focus == 1, true);
+        // Input fields — right edge at inner right (223) minus 2px padding
+        DrawInputField(target, 110, 74, 109, 14, loginBuf, loginLen, focus == 0, false);
+        DrawInputField(target, 110, 93, 109, 14, passBuf,  passLen,  focus == 1, true);
 
         // Buttons
-        DrawButton(target, 100, 118, 44, 18, "OK",     focus == 2);
-        DrawButton(target, 160, 118, 60, 18, "Cancel", focus == 3);
+        DrawButton(target,  80, 118, 44, 18, "OK",     focus == 2);
+        DrawButton(target, 140, 118, 60, 18, "Cancel", focus == 3);
     }
 };
 
@@ -345,6 +446,7 @@ private:
         Coord H = target->GetHeight();
 
         target->FillRect(0, 0, W, H, dark, false);
+        drawWallpaper(dc, target);
         target->FillRect(0, H - 14, W,  1, dark,  false);
         target->FillRect(0, H - 13, W, 13, light, false);
 
@@ -486,9 +588,12 @@ private:
 
         NetStatus_T ns{};
         get_net_status(&ns);
+        SysInfo_T si{};
+        read_sysinfo(&si);
 
         Coord W = target->GetWidth(), H = target->GetHeight();
         target->FillRect(0,   0,   W,   H,  dark,  false);
+        drawWallpaper(dc, target);
         target->FillRect(0, H-14,  W,   1,  dark,  false);
         target->FillRect(0, H-13,  W,  13,  light, false);
         target->FillRect(5,   8, 310, 175,  dark,  false);
@@ -506,8 +611,8 @@ private:
         // Section: Interface
         opts.horizontalAlign = PlatformAlign::Begin;
 
-        // IP row
-        char ipbuf[16]; ipToStr(ns.ip, ipbuf);
+        // IP row — from sysinfo (set by ETH driver via ScSysInfo 0x02)
+        char ipbuf[16]; ipToStr(si.ip_addr, ipbuf);
         target->DrawText(10, 28, 36, 12, "IP:",  &opts, false);
         target->DrawText(50, 28, 250, 12, (const mchar*)ipbuf, &opts, false);
 
@@ -565,7 +670,11 @@ private:
 
 class MountWindow {
 public:
-    MountWindow() { currentPath[0] = 0; mountRoot[0] = 0; }
+    MountWindow() { currentPath[0] = 0; mountRoot[0] = 0; viewFilePath[0] = 0; }
+
+    bool         wantsViewFile = false;
+    char         viewFilePath[128];
+    unsigned int viewFileSize  = 0;
 
     static void onEvent(void* instance, struct PlatformWindowInterfaceInputEvent* data) {
         reinterpret_cast<MountWindow*>(instance)->onEvent_(data);
@@ -585,7 +694,7 @@ private:
 
     MountInfo_T   mounts[8];
     int           nMounts  = 0;
-    VfsDirEntry_T entries[32];
+    VfsDirEntry_T entries[64];
     int           nEntries = 0;
 
     static const int VIS = 10;
@@ -691,16 +800,32 @@ private:
             }
             if (key->isEnter) {
                 if (sel == listItems) { wnd->Close(); return; }
-                if (sel == 0) goUp();                    // [..]
-                else goInto(sel - 1);
-                wnd->Repaint();
+                if (sel == 0) { goUp(); wnd->Repaint(); return; }
+                int ei = sel - 1;
+                if (entries[ei].is_dir) {
+                    goInto(ei); wnd->Repaint();
+                } else {
+                    // Build full path for read_file: currentPath + "/" + name
+                    int cl = plen();
+                    int nl = entries[ei].name_len < 32 ? entries[ei].name_len : 32;
+                    int p  = 0;
+                    for (int i = 0; i < cl; i++) viewFilePath[p++] = currentPath[i];
+                    if (cl > 1) viewFilePath[p++] = '/';  // avoid "//" at root
+                    for (int i = 0; i < nl; i++) viewFilePath[p++] = (char)entries[ei].name[i];
+                    viewFilePath[p] = 0;
+                    viewFileSize   = entries[ei].size;
+                    wantsViewFile  = true;
+                    wnd->Close();
+                }
             }
         }
     }
 
-    void drawChrome(PlatformBitmap* target, const mchar* title, const mchar* pathLine,
+    void drawChrome(PlatformDrawingContext* dc, PlatformBitmap* target,
+                    const mchar* title, const mchar* pathLine,
                     PlatformDrawTextOptions& opts, Coord W, Coord H) {
         target->FillRect(0,    0,   W,   H,  dark,  false);
+        drawWallpaper(dc, target);
         target->FillRect(0,  H-14,  W,   1,  dark,  false);
         target->FillRect(0,  H-13,  W,  13,  light, false);
         target->FillRect(5,   8,  310, 175,  dark,  false);
@@ -748,7 +873,7 @@ private:
             nMounts = raw > 0 ? raw : 0;
             if (sel > nMounts) sel = nMounts;
 
-            drawChrome(target, "Files", "Mount Points", opts, W, H);
+            drawChrome(dc, target, "Files", "Mount Points", opts, W, H);
 
             if (nMounts == 0) {
                 opts.horizontalAlign = PlatformAlign::Middle;
@@ -786,7 +911,7 @@ private:
             int listItems = 1 + nEntries;  // [..] + entries; Back at sel==listItems
             if (sel > listItems) sel = listItems;
 
-            drawChrome(target, "Files", (const mchar*)currentPath, opts, W, H);
+            drawChrome(dc, target, "Files", (const mchar*)currentPath, opts, W, H);
 
             for (int row = 0; row < VIS; row++) {
                 int vi = scrollTop + row;
@@ -817,9 +942,219 @@ private:
     }
 };
 
-// 
+//
+// Window — File Viewer  (ScReadFile 0x20 + ScChdir 0x2E)
+// Displays the text content of a file selected in MountWindow.
+// read_file only searches one directory level, so we chdir to the parent
+// dir first, then call read_file with just the filename component.
+//
+
+class FileViewerWindow {
+public:
+    // 32 KB of visible content + 512-byte pad for last FAT sector overflow
+    static const int MAX_FILE  = 32768;
+    static const int BUF_SIZE  = MAX_FILE + 512;
+    static const int MAX_LINES = 256;
+    static const int VIS       = 10;
+
+    FileViewerWindow(const char* path, unsigned int size) {
+        int pi = 0;
+        while (path[pi] && pi < 127) { filePath[pi] = path[pi]; pi++; }
+        filePath[pi] = 0;
+
+        nLines = 0; scrollTop = 0; fileBytes = 0;
+
+        if (size == 0) {
+            setMsg("(empty file)");
+        } else if (size > (unsigned int)MAX_FILE) {
+            setMsg("(file too large to display)");
+        } else {
+#ifdef MEMENTO_BACKEND_R2
+            long ret = 0;
+
+            // ISO9660: kernel read_file accepts the full absolute path directly
+            // (try_iso9660_absolute strips the mount prefix and walks the directory).
+            // FAT12: fat83() is a single-component converter, so we must chdir to
+            // the parent directory and pass only the bare filename to read_file.
+            {
+                const char* iso_pfx = "/mnt/iso";
+                int j = 0;
+                while (iso_pfx[j] && path[j] == iso_pfx[j]) j++;
+                bool is_iso = (!iso_pfx[j] && (path[j] == '/' || path[j] == 0));
+
+                if (is_iso) {
+                    ret = read_file((const unsigned char*)path, (unsigned char*)content);
+                } else {
+                    int last = 0;
+                    for (int i = 0; path[i]; i++) if (path[i] == '/') last = i;
+                    char parentBuf[128];
+                    int  pl = (last == 0) ? 1 : last;
+                    for (int i = 0; i < pl; i++) parentBuf[i] = path[i];
+                    parentBuf[pl] = 0;
+                    chdir((const unsigned char*)parentBuf);
+                    ret = read_file((const unsigned char*)(path + last + 1), (unsigned char*)content);
+                }
+            }
+
+            // libcr2 read_file: returns 1 on success, 0 on failure
+            if (ret != 0) {
+                fileBytes = size;
+            } else {
+                setMsg("(read error)");
+            }
+#else
+            setMsg("(read_file not available on this platform)");
+#endif
+        }
+        content[fileBytes] = 0;
+        buildLines();
+    }
+
+    static void onEvent(void* instance, struct PlatformWindowInterfaceInputEvent* data) {
+        reinterpret_cast<FileViewerWindow*>(instance)->onEvent_(data);
+    }
+    void SetWindow(PlatformWindow* w) { wnd = w; }
+
+private:
+    PlatformWindow* wnd   = nullptr;
+    PlatformColor*  dark  = nullptr;
+    PlatformColor*  light = nullptr;
+    PlatformFont*   font  = nullptr;
+
+    char         filePath[128];
+    unsigned int fileBytes  = 0;
+    int          scrollTop  = 0;
+    int          nLines     = 0;
+
+    // Static: only one FileViewerWindow open at a time; keeps heap object small.
+    static char content[BUF_SIZE + 1];
+    static int  lineStart[MAX_LINES];
+    static int  lineLen[MAX_LINES];
+
+    void setMsg(const char* msg) {
+        int i = 0;
+        while (msg[i] && i < MAX_FILE) { content[i] = msg[i]; i++; }
+        fileBytes = i;
+    }
+
+    void buildLines() {
+        nLines = 0;
+        int ls = 0, i = 0;
+        while (i <= (int)fileBytes && nLines < MAX_LINES) {
+            if (i == (int)fileBytes || content[i] == '\n') {
+                int len = i - ls;
+                while (len > 0 && content[ls + len - 1] == '\r') len--;
+                lineStart[nLines] = ls;
+                lineLen[nLines]   = len;
+                nLines++;
+                ls = i + 1;
+            }
+            i++;
+        }
+        if (nLines == 0) { lineStart[0] = 0; lineLen[0] = 0; nLines = 1; }
+    }
+
+    void clampScroll() {
+        int maxTop = nLines - VIS;
+        if (maxTop < 0) maxTop = 0;
+        if (scrollTop > maxTop) scrollTop = maxTop;
+        if (scrollTop < 0)      scrollTop = 0;
+    }
+
+    void onEvent_(struct PlatformWindowInterfaceInputEvent* data) {
+        if (data->type == PlatformWindowInputEventType::OnPaint) {
+            OnPaint(data->Data.OnPaint.ctx, data->Data.OnPaint.target); return;
+        }
+        if (data->type != PlatformWindowInputEventType::OnKeyEvent) return;
+        auto* key = data->Data.OnKeyEvent.key;
+        if (!key->isKeyDown) return;
+        if (key->isEscape || key->isEnter) { wnd->Close(); return; }
+        if (key->isArrowUp)   { scrollTop--;        clampScroll(); wnd->Repaint(); return; }
+        if (key->isArrowDown) { scrollTop++;        clampScroll(); wnd->Repaint(); return; }
+        if (key->isPageUp)    { scrollTop -= VIS;   clampScroll(); wnd->Repaint(); return; }
+        if (key->isPageDown)  { scrollTop += VIS;   clampScroll(); wnd->Repaint(); return; }
+    }
+
+    void OnPaint(PlatformDrawingContext* dc, PlatformBitmap* target) {
+        if (!target) return;
+        if (!dark)  dark  = dc->CreateColor(0xFF0A0A20, nullptr, nullptr);
+        if (!light) light = dc->CreateColor(0xFFE0E0FF, nullptr, nullptr);
+        if (!font)  font  = dc->CreateFont(12, nullptr, false, false, false, nullptr, nullptr);
+        if (!dark || !light || !font) return;
+
+        Coord W = target->GetWidth(), H = target->GetHeight();
+
+        target->FillRect(0,    0,   W,   H,  dark,  false);
+        drawWallpaper(dc, target);
+        target->FillRect(0,  H-14,  W,   1,  dark,  false);
+        target->FillRect(0,  H-13,  W,  13,  light, false);
+        target->FillRect(5,   8,  310, 175,  dark,  false);
+        target->FillRect(7,  10,  306, 171,  light, false);
+        target->FillRect(7,  24,  306,   1,  dark,  false);
+        target->FillRect(7,  37,  306,   1,  dark,  false);
+
+        PlatformDrawTextOptions opts{};
+        opts.font            = font;
+        opts.foreground      = dark;
+        opts.horizontalAlign = PlatformAlign::Middle;
+        opts.verticalAlign   = PlatformAlign::Middle;
+        target->DrawText(7,    10, 280, 14, "File Viewer",  &opts, false);
+        target->DrawText(0,  H-13,   W, 13, "File  -  r2", &opts, false);
+
+        // Path on left, line/total on right of the subheader row
+        opts.horizontalAlign = PlatformAlign::Begin;
+        target->DrawText(10, 25, 220, 12, (const mchar*)filePath, &opts, false);
+
+        if (nLines > VIS) {
+            // "line / total" indicator, e.g. "12/47"
+            char sbuf[16];
+            int sn = 0;
+            auto writeInt = [&](int v) {
+                if (v == 0) { sbuf[sn++] = '0'; return; }
+                char tmp[6]; int ti = 0;
+                while (v > 0) { tmp[ti++] = '0' + v % 10; v /= 10; }
+                for (int j = ti - 1; j >= 0; j--) sbuf[sn++] = tmp[j];
+            };
+            writeInt(scrollTop + 1);
+            sbuf[sn++] = '/';
+            writeInt(nLines);
+            sbuf[sn] = 0;
+            opts.horizontalAlign = PlatformAlign::End;
+            target->DrawText(10, 25, 300, 12, (const mchar*)sbuf, &opts, false);
+        }
+
+        opts.horizontalAlign = PlatformAlign::Begin;
+        for (int row = 0; row < VIS; row++) {
+            int li = scrollTop + row;
+            if (li >= nLines) break;
+            Coord ry = 38 + row * 12;
+            char  lineBuf[128];
+            int   ll = lineLen[li] < 127 ? lineLen[li] : 127;
+            for (int j = 0; j < ll; j++) {
+                char c = content[lineStart[li] + j];
+                lineBuf[j] = (c >= 0x20 && c < 0x7F) ? c : '.';
+            }
+            lineBuf[ll] = 0;
+            target->DrawText(9, ry, 302, 11, (const mchar*)lineBuf, &opts, false);
+        }
+
+        // Back button
+        target->FillRect(7,   158, 306,  1, dark,  false);
+        target->FillRect(120, 161,  80, 13, dark,  false);
+        target->FillRect(121, 162,  78, 11, light, false);
+        opts.foreground      = dark;
+        opts.horizontalAlign = PlatformAlign::Middle;
+        target->DrawText(120, 161, 80, 13, "Back", &opts, false);
+    }
+};
+
+char FileViewerWindow::content[FileViewerWindow::BUF_SIZE + 1];
+int  FileViewerWindow::lineStart[FileViewerWindow::MAX_LINES];
+int  FileViewerWindow::lineLen[FileViewerWindow::MAX_LINES];
+
+//
 // Window 5 — Desktop launcher
-// 
+//
 
 class DesktopWindow {
 public:
@@ -831,6 +1166,7 @@ public:
     bool wantsTasks = false;
     bool wantsMount = false;
     bool wantsNet   = false;
+    bool wantsShell = false;
 
 private:
     PlatformWindow* wnd   = nullptr;
@@ -839,106 +1175,115 @@ private:
     PlatformFont*   font  = nullptr;
     int             sel   = 0;  // 0=Clock, 1=Shell, 2=Net, 3=Mount, 4=Tasks
 
-    // Icon layout: 5×32px icons, 20px gaps, centred in 296px inner width
-    //   left_pad = (296 - 5*32 - 4*20) / 2 = 28
-    static const int IX0 = 40, IX1 = 92, IX2 = 144, IX3 = 196, IX4 = 248;
-    static const int IY  = 55;   // icon top y
-    static const int LY  = 91;   // label top y  (IY + 32 + 4)
+    // Icon bitmaps are created at Coord(32)×Coord(32); at DPI=86 that is
+    // ceil(32·86/96)=29 raw pixels.  All screen positions use Dim (raw pixels)
+    // sized for the DPI=86 inner dialog area (≈265×104 px at x=11,y=22).
+    static const int BSIZ = 29;   // icon pixel size at DPI=86
+    static const int IX0  = 31, IX1 = 80, IX2 = 129, IX3 = 178, IX4 = 227;
+    static const int IY   = 41;   // icon top y (px below title separator)
+    static const int LY   = 73;   // label top y  (IY + BSIZ + 3)
+    static const int LW   = 48;   // label box width
+    static const int LH   = 12;   // label box height
 
-    // Draw a dark 36×36 selection outline (2 px extension on each side)
-    void DrawSel(PlatformBitmap* t, Coord ix, Coord iy) {
-        t->FillRect(ix - 2, iy - 2, 36, 36, dark, false);
+    PlatformBitmap* bmpClock  = nullptr;
+    PlatformBitmap* bmpShell  = nullptr;
+    PlatformBitmap* bmpNet    = nullptr;
+    PlatformBitmap* bmpMount  = nullptr;
+    PlatformBitmap* bmpTasks  = nullptr;
+
+    void MakeBitmaps(PlatformDrawingContext* dc) {
+        // Clock: circular face, corner roundoff, tick marks, hands
+        if (!bmpClock) {
+            bmpClock = dc->CreateBitmap(Coord(32), Coord(32), nullptr, nullptr);
+            if (bmpClock) {
+                bmpClock->FillRectD(Dim(0),  Dim(0),  Dim(29), Dim(29), dark);   // bg
+                bmpClock->FillRectD(Dim(3),  Dim(3),  Dim(23), Dim(23), light);  // face
+                bmpClock->FillRectD(Dim(3),  Dim(3),  Dim(3),  Dim(3),  dark);   // corner TL
+                bmpClock->FillRectD(Dim(23), Dim(3),  Dim(3),  Dim(3),  dark);   // corner TR
+                bmpClock->FillRectD(Dim(3),  Dim(23), Dim(3),  Dim(3),  dark);   // corner BL
+                bmpClock->FillRectD(Dim(23), Dim(23), Dim(3),  Dim(3),  dark);   // corner BR
+                bmpClock->FillRectD(Dim(12), Dim(4),  Dim(5),  Dim(2),  dark);   // 12 tick
+                bmpClock->FillRectD(Dim(23), Dim(12), Dim(2),  Dim(5),  dark);   // 3  tick
+                bmpClock->FillRectD(Dim(12), Dim(23), Dim(5),  Dim(2),  dark);   // 6  tick
+                bmpClock->FillRectD(Dim(4),  Dim(12), Dim(2),  Dim(5),  dark);   // 9  tick
+                bmpClock->FillRectD(Dim(13), Dim(7),  Dim(2),  Dim(7),  dark);   // hour hand
+                bmpClock->FillRectD(Dim(14), Dim(13), Dim(7),  Dim(2),  dark);   // min  hand
+                bmpClock->FillRectD(Dim(13), Dim(13), Dim(2),  Dim(2),  dark);   // pivot
+            }
+        }
+        // Shell: terminal window with title bar dots and ">_" prompt
+        if (!bmpShell) {
+            bmpShell = dc->CreateBitmap(Coord(32), Coord(32), nullptr, nullptr);
+            if (bmpShell) {
+                PlatformDrawTextOptions to{};
+                to.font = font; to.foreground = light;
+                to.horizontalAlign = PlatformAlign::Begin;
+                to.verticalAlign   = PlatformAlign::Begin;
+                bmpShell->FillRectD(Dim(0),  Dim(0),  Dim(29), Dim(29), dark);   // bg
+                bmpShell->FillRectD(Dim(2),  Dim(2),  Dim(25), Dim(5),  light);  // title bar
+                bmpShell->FillRectD(Dim(4),  Dim(3),  Dim(3),  Dim(3),  dark);   // dot 1
+                bmpShell->FillRectD(Dim(9),  Dim(3),  Dim(3),  Dim(3),  dark);   // dot 2
+                bmpShell->FillRectD(Dim(14), Dim(3),  Dim(3),  Dim(3),  dark);   // dot 3
+                bmpShell->DrawTextD(Dim(3),  Dim(9),  Dim(24), Dim(16), ">_", &to);
+            }
+        }
+        // Net: parabolic dish (opens right) + signal glyphs << / >>
+        if (!bmpNet) {
+            bmpNet = dc->CreateBitmap(Coord(32), Coord(32), nullptr, nullptr);
+            if (bmpNet) {
+                PlatformDrawTextOptions to{};
+                to.font = font; to.foreground = light;
+                to.horizontalAlign = PlatformAlign::Begin;
+                to.verticalAlign   = PlatformAlign::Begin;
+                bmpNet->FillRectD(Dim(0),  Dim(0),  Dim(29), Dim(29), dark);
+                bmpNet->FillRectD(Dim(10), Dim(3),  Dim(4),  Dim(2),  light);  // top arm
+                bmpNet->FillRectD(Dim(7),  Dim(5),  Dim(4),  Dim(2),  light);  // curve
+                bmpNet->FillRectD(Dim(5),  Dim(7),  Dim(3),  Dim(2),  light);  // curve
+                bmpNet->FillRectD(Dim(3),  Dim(9),  Dim(3),  Dim(2),  light);  // curve
+                bmpNet->FillRectD(Dim(2),  Dim(11), Dim(3),  Dim(4),  light);  // apex
+                bmpNet->FillRectD(Dim(3),  Dim(15), Dim(3),  Dim(2),  light);  // curve
+                bmpNet->FillRectD(Dim(5),  Dim(17), Dim(3),  Dim(2),  light);  // curve
+                bmpNet->FillRectD(Dim(7),  Dim(19), Dim(4),  Dim(2),  light);  // curve
+                bmpNet->FillRectD(Dim(10), Dim(21), Dim(4),  Dim(2),  light);  // bottom arm
+                bmpNet->FillRectD(Dim(9),  Dim(23), Dim(5),  Dim(2),  light);  // base top
+                bmpNet->FillRectD(Dim(7),  Dim(25), Dim(7),  Dim(2),  light);  // base mid
+                bmpNet->FillRectD(Dim(5),  Dim(27), Dim(10), Dim(2),  light);  // base foot
+                bmpNet->DrawTextD(Dim(15), Dim(3),  Dim(12), Dim(10), "<<",    &to);
+                bmpNet->DrawTextD(Dim(15), Dim(13), Dim(12), Dim(10), ">>",    &to);
+            }
+        }
+        // Mount: three stacked bars with left-side label dot
+        if (!bmpMount) {
+            bmpMount = dc->CreateBitmap(Coord(32), Coord(32), nullptr, nullptr);
+            if (bmpMount) {
+                bmpMount->FillRectD(Dim(0),  Dim(0),  Dim(29), Dim(29), dark);
+                bmpMount->FillRectD(Dim(3),  Dim(4),  Dim(23), Dim(5),  light);  // bar 1
+                bmpMount->FillRectD(Dim(3),  Dim(12), Dim(23), Dim(5),  light);  // bar 2
+                bmpMount->FillRectD(Dim(3),  Dim(20), Dim(23), Dim(5),  light);  // bar 3
+                bmpMount->FillRectD(Dim(5),  Dim(6),  Dim(4),  Dim(2),  dark);   // dot 1
+                bmpMount->FillRectD(Dim(5),  Dim(14), Dim(4),  Dim(2),  dark);   // dot 2
+                bmpMount->FillRectD(Dim(5),  Dim(22), Dim(4),  Dim(2),  dark);   // dot 3
+            }
+        }
+        // Tasks: bar-graph with 4 bars of varying height over a baseline
+        if (!bmpTasks) {
+            bmpTasks = dc->CreateBitmap(Coord(32), Coord(32), nullptr, nullptr);
+            if (bmpTasks) {
+                bmpTasks->FillRectD(Dim(0),  Dim(0),  Dim(29), Dim(29), dark);
+                bmpTasks->FillRectD(Dim(3),  Dim(18), Dim(4),  Dim(7),  light);  // bar 1
+                bmpTasks->FillRectD(Dim(9),  Dim(11), Dim(4),  Dim(14), light);  // bar 2
+                bmpTasks->FillRectD(Dim(15), Dim(14), Dim(4),  Dim(11), light);  // bar 3
+                bmpTasks->FillRectD(Dim(22), Dim(7),  Dim(4),  Dim(18), light);  // bar 4
+                bmpTasks->FillRectD(Dim(3),  Dim(25), Dim(23), Dim(2),  light);  // baseline
+            }
+        }
     }
 
-    void DrawClock(PlatformBitmap* t, Coord ix, Coord iy, bool s) {
-        if (s) DrawSel(t, ix, iy);
-        t->FillRect(ix,    iy,    32, 32, dark,  false);   // background
-        t->FillRect(ix+3,  iy+3,  26, 26, light, false);   // clock face
-        // Corner roundoff (remove light corners → circle approximation)
-        t->FillRect(ix+3,  iy+3,  3, 3, dark, false);
-        t->FillRect(ix+26, iy+3,  3, 3, dark, false);
-        t->FillRect(ix+3,  iy+26, 3, 3, dark, false);
-        t->FillRect(ix+26, iy+26, 3, 3, dark, false);
-        // Tick marks at 12 / 3 / 6 / 9
-        t->FillRect(ix+13, iy+4,  6, 2, dark, false);
-        t->FillRect(ix+26, iy+13, 2, 6, dark, false);
-        t->FillRect(ix+13, iy+26, 6, 2, dark, false);
-        t->FillRect(ix+4,  iy+13, 2, 6, dark, false);
-        // Hour hand (up) and minute hand (right), pivot dot
-        t->FillRect(ix+15, iy+8,  2, 9, dark, false);
-        t->FillRect(ix+16, iy+15, 8, 2, dark, false);
-        t->FillRect(ix+15, iy+15, 2, 2, dark, false);
-    }
-
-    void DrawShell(PlatformBitmap* t, Coord ix, Coord iy, bool s) {
-        if (s) DrawSel(t, ix, iy);
-        t->FillRect(ix,   iy,   32, 32, dark,  false);     // terminal bg
-        t->FillRect(ix+2, iy+2, 28,  6, light, false);     // title bar strip
-        // Three window-control dots in the title bar
-        t->FillRect(ix+4,  iy+3, 4, 4, dark, false);
-        t->FillRect(ix+10, iy+3, 4, 4, dark, false);
-        t->FillRect(ix+16, iy+3, 4, 4, dark, false);
-        // ">_" prompt text
-        PlatformDrawTextOptions opts{};
-        opts.font            = font;
-        opts.foreground      = light;
-        opts.horizontalAlign = PlatformAlign::Begin;
-        opts.verticalAlign   = PlatformAlign::Begin;
-        t->DrawText(ix+4, iy+10, 24, 16, ">_", &opts, false);
-    }
-
-    void DrawNet(PlatformBitmap* t, Coord ix, Coord iy, bool s) {
-        if (s) DrawSel(t, ix, iy);
-        t->FillRect(ix,    iy,    32, 32, dark,  false);
-        // Parabolic dish (opens right; each step's right edge = next step's left
-        // edge so consecutive steps share a pixel column and stay connected):
-        t->FillRect(ix+11, iy+3,  4,  2, light, false);  // top arm
-        t->FillRect(ix+8,  iy+5,  4,  2, light, false);  // curve step
-        t->FillRect(ix+5,  iy+7,  4,  2, light, false);  // curve step
-        t->FillRect(ix+3,  iy+9,  3,  2, light, false);  // curve step
-        t->FillRect(ix+2,  iy+11, 3,  5, light, false);  // apex (flat centre)
-        t->FillRect(ix+3,  iy+16, 3,  2, light, false);  // curve step
-        t->FillRect(ix+5,  iy+18, 4,  2, light, false);  // curve step
-        t->FillRect(ix+8,  iy+20, 4,  2, light, false);  // curve step
-        t->FillRect(ix+11, iy+22, 4,  2, light, false);  // bottom arm
-        // Triangular base (narrow at top where dish meets mount, wide at foot):
-        t->FillRect(ix+9,  iy+24, 6,  2, light, false);
-        t->FillRect(ix+7,  iy+26, 8,  2, light, false);
-        t->FillRect(ix+5,  iy+28, 12, 2, light, false);
-        // Signal glyphs: "<" incoming (from outer, pointing toward dish),
-        // ">" outgoing (from dish, pointing away); staggered in two columns.
-        PlatformDrawTextOptions sopts{};
-        sopts.font            = font;
-        sopts.foreground      = light;
-        sopts.horizontalAlign = PlatformAlign::Begin;
-        sopts.verticalAlign   = PlatformAlign::Begin;
-        t->DrawText(ix+17, iy+3,  12, 12, "<<", &sopts, false);  // incoming, upper
-        t->DrawText(ix+17, iy+11, 12, 12, ">>", &sopts, false);  // outgoing, lower
-    }
-
-    void DrawMount(PlatformBitmap* t, Coord ix, Coord iy, bool s) {
-        if (s) DrawSel(t, ix, iy);
-        t->FillRect(ix,   iy,    32, 32, dark,  false);
-        // Three stacked volume bars representing mount points
-        t->FillRect(ix+3, iy+5,  26,  6, light, false);
-        t->FillRect(ix+3, iy+14, 26,  6, light, false);
-        t->FillRect(ix+3, iy+23, 26,  6, light, false);
-        // Small label dot on the left of each bar
-        t->FillRect(ix+5, iy+7,  4,   2, dark,  false);
-        t->FillRect(ix+5, iy+16, 4,   2, dark,  false);
-        t->FillRect(ix+5, iy+25, 4,   2, dark,  false);
-    }
-
-    void DrawTasks(PlatformBitmap* t, Coord ix, Coord iy, bool s) {
-        if (s) DrawSel(t, ix, iy);
-        t->FillRect(ix,    iy,    32, 32, dark,  false);
-        // Four activity bars at varying heights (task manager graph)
-        t->FillRect(ix+3,  iy+20, 4,  9, light, false);
-        t->FillRect(ix+10, iy+12, 4, 17, light, false);
-        t->FillRect(ix+17, iy+16, 4, 13, light, false);
-        t->FillRect(ix+24, iy+8,  4, 21, light, false);
-        // Baseline
-        t->FillRect(ix+3,  iy+28, 26,  2, light, false);
+    void BlitIcon(PlatformBitmap* t, PlatformBitmap* bm, int ix, int iy, bool s) {
+        if (s) t->FillRectD(Dim(ix - 2), Dim(iy - 2), Dim(BSIZ + 4), Dim(BSIZ + 4), dark);
+        if (bm)
+            t->CopyBitmapD(Dim(ix), Dim(iy), Dim(BSIZ), Dim(BSIZ),
+                           bm, Dim(0), Dim(0), Dim(BSIZ), Dim(BSIZ), false, 255);
     }
 
     void onEvent_(struct PlatformWindowInterfaceInputEvent* data) {
@@ -953,6 +1298,7 @@ private:
         if (key->isArrowLeft  || key->isArrowUp)   { sel = (sel + 4) % 5; wnd->Repaint(); return; }
         if (key->isArrowRight || key->isArrowDown) { sel = (sel + 1) % 5; wnd->Repaint(); return; }
         if (key->isEnter) {
+            if (sel == 1) wantsShell = true;
             if (sel == 2) wantsNet   = true;
             if (sel == 3) wantsMount = true;
             if (sel == 4) wantsTasks = true;
@@ -966,20 +1312,22 @@ private:
         if (!light) light = dc->CreateColor(0xFFE0E0FF, nullptr, nullptr);
         if (!font)  font  = dc->CreateFont(12, nullptr, false, false, false, nullptr, nullptr);
         if (!dark || !light || !font) return;
+        MakeBitmaps(dc);
 
         Coord W = target->GetWidth();
         Coord H = target->GetHeight();
 
         target->FillRect(0, 0, W, H, dark, false);
+        drawWallpaper(dc, target);
 
         // Taskbar
         target->FillRect(0, H - 14, W,  1, dark,  false);
         target->FillRect(0, H - 13, W, 13, light, false);
 
-        // Dialog: outer border, light interior, title-bar separator
+        // Dialog frame
         target->FillRect(10, 22, 300, 120, dark,  false);
         target->FillRect(12, 24, 296, 116, light, false);
-        target->FillRect(12, 38, 296,   1, dark,  false);
+        target->FillRectD(Dim(11), Dim(35), Dim(265), Dim(1), dark);  // title separator
 
         PlatformDrawTextOptions opts{};
         opts.font            = font;
@@ -987,22 +1335,28 @@ private:
         opts.horizontalAlign = PlatformAlign::Middle;
         opts.verticalAlign   = PlatformAlign::Middle;
 
-        target->DrawText(12,     24, 270,  14, "Desktop",        &opts, false);
-        target->DrawText(0,  H - 13,   W,  13, "Desktop  -  r2", &opts, false);
+        target->DrawText(12,    24, 270,  14, "Desktop",        &opts, false);
+        target->DrawText(0, H - 13,   W,  13, "Desktop  -  r2", &opts, false);
 
-        // Icons
-        DrawClock (target, IX0, IY, sel == 0);
-        DrawShell (target, IX1, IY, sel == 1);
-        DrawNet   (target, IX2, IY, sel == 2);
-        DrawMount (target, IX3, IY, sel == 3);
-        DrawTasks (target, IX4, IY, sel == 4);
+        // Icons — blitted from pre-drawn bitmaps at exact Dim pixel positions
+        BlitIcon(target, bmpClock, IX0, IY, sel == 0);
+        BlitIcon(target, bmpShell, IX1, IY, sel == 1);
+        BlitIcon(target, bmpNet,   IX2, IY, sel == 2);
+        BlitIcon(target, bmpMount, IX3, IY, sel == 3);
+        BlitIcon(target, bmpTasks, IX4, IY, sel == 4);
 
-        // Labels — 48px wide centred on icon centre
-        target->DrawText(IX0 - 8, LY, 48, 16, "Clock", &opts, false);
-        target->DrawText(IX1 - 8, LY, 48, 16, "Shell", &opts, false);
-        target->DrawText(IX2 - 8, LY, 48, 16, "Net",   &opts, false);
-        target->DrawText(IX3 - 8, LY, 48, 16, "Mount", &opts, false);
-        target->DrawText(IX4 - 8, LY, 48, 16, "Tasks", &opts, false);
+        // Labels centred on each icon
+        PlatformDrawTextOptions lo{};
+        lo.font            = font;
+        lo.foreground      = dark;
+        lo.horizontalAlign = PlatformAlign::Middle;
+        lo.verticalAlign   = PlatformAlign::Middle;
+        const int loff = (LW - BSIZ) / 2;   // 9 px: centres LW box on BSIZ icon
+        target->DrawTextD(Dim(IX0 - loff), Dim(LY), Dim(LW), Dim(LH), "Clock", &lo);
+        target->DrawTextD(Dim(IX1 - loff), Dim(LY), Dim(LW), Dim(LH), "Shell", &lo);
+        target->DrawTextD(Dim(IX2 - loff), Dim(LY), Dim(LW), Dim(LH), "Net",   &lo);
+        target->DrawTextD(Dim(IX3 - loff), Dim(LY), Dim(LW), Dim(LH), "Mount", &lo);
+        target->DrawTextD(Dim(IX4 - loff), Dim(LY), Dim(LW), Dim(LH), "Tasks", &lo);
     }
 };
 
@@ -1017,7 +1371,7 @@ extern "C" int main() {
     UIRootImpl::PlatformWindowOptions opts{};
     opts.initialVisible = true;
     opts.useCustomDPI   = true;
-    opts.customDPI      = 96;
+    opts.customDPI      = 86; // 96, 86, 64, 125 (120% zoom-in)
 
     // --- Window 1 ---
     HelloWindow* hw = new HelloWindow();
@@ -1063,7 +1417,36 @@ extern "C" int main() {
             wnd3->SetVisible(true);
             root->EnterMainLoop();
 
-            if (desk->wantsNet) {
+            if (desk->wantsShell) {
+#ifdef MEMENTO_BACKEND_R2
+                set_video_mode(0x03);
+                unsigned char sh_pid = 0;
+                if (run_elf((const unsigned char*)"sh.elf",
+                            (const unsigned char*)"sh.elf", &sh_pid)) {
+                    int misses = 0;
+                    while (true) {
+                        sleep_ms(500);
+                        TaskInfo_T tasks[16];
+                        long n = list_tasks(tasks, 16);
+                        if (n <= 0) continue;  // try_lock failed, keep waiting
+                        bool alive = false;
+                        for (long i = 0; i < n; i++) {
+                            // Match by name ("SH.ELF" → name[0]='S', name[1]='H')
+                            // and status < 4 (Ready/Running/Idle/Blocked)
+                            if (tasks[i].name[0] == 'S' && tasks[i].name[1] == 'H'
+                                    && tasks[i].status < 4) {
+                                alive = true;
+                                break;
+                            }
+                        }
+                        if (alive) { misses = 0; continue; }
+                        if (++misses >= 3) break;  // 3 consecutive misses = shell gone
+                    }
+                }
+                set_video_mode(0x13);
+#endif
+                showDesktop = true;
+            } else if (desk->wantsNet) {
                 NetWindow* nw = new NetWindow();
                 PlatformWindow* wndN = root->CreateWindow(
                     "Network", 0, 0,
@@ -1088,15 +1471,42 @@ extern "C" int main() {
                 }
                 showDesktop = true;
             } else if (desk->wantsMount) {
-                MountWindow* mw = new MountWindow();
-                PlatformWindow* wnd5 = root->CreateWindow(
-                    "Files", 0, 0,
-                    MountWindow::onEvent, mw,
-                    &opts, nullptr, nullptr);
-                if (wnd5) {
-                    mw->SetWindow(wnd5);
-                    wnd5->SetVisible(true);
-                    root->EnterMainLoop();
+#ifdef MEMENTO_BACKEND_R2
+                unsigned long mountMark = r2_heap_checkpoint();
+#endif
+                bool showMount = true;
+                while (showMount) {
+                    showMount = false;
+#ifdef MEMENTO_BACKEND_R2
+                    r2_heap_restore(mountMark);
+#endif
+                    MountWindow* mw = new MountWindow();
+                    PlatformWindow* wnd5 = root->CreateWindow(
+                        "Files", 0, 0, MountWindow::onEvent, mw, &opts, nullptr, nullptr);
+                    if (wnd5) {
+                        mw->SetWindow(wnd5);
+                        wnd5->SetVisible(true);
+                        root->EnterMainLoop();
+                    }
+                    if (mw->wantsViewFile) {
+                        // Copy path to stack before heap restore frees mw
+                        char vpath[128] = {};
+                        unsigned int vsz = mw->viewFileSize;
+                        for (int i = 0; mw->viewFilePath[i] && i < 127; i++)
+                            vpath[i] = mw->viewFilePath[i];
+#ifdef MEMENTO_BACKEND_R2
+                        r2_heap_restore(mountMark);
+#endif
+                        FileViewerWindow* fvw = new FileViewerWindow(vpath, vsz);
+                        PlatformWindow* wndF = root->CreateWindow(
+                            "File", 0, 0, FileViewerWindow::onEvent, fvw, &opts, nullptr, nullptr);
+                        if (wndF) {
+                            fvw->SetWindow(wndF);
+                            wndF->SetVisible(true);
+                            root->EnterMainLoop();
+                        }
+                        showMount = true;  // return to file browser after viewing
+                    }
                 }
                 showDesktop = true;
             }
