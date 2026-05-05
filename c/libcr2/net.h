@@ -96,6 +96,17 @@ typedef struct {
 extern NetDriver_T net_drv;
 
 /*
+ *  int net_recv_nb() prototype
+ *
+ *  Non-blocking receive.  Drains one Ethernet frame from the kernel queue
+ *  and — if it is an IPv4/TCP frame — copies the IP payload into buf and
+ *  returns its length.  ARP and ICMP are handled in-line (replied to or
+ *  cached).  Returns 0 immediately if the queue is empty; never blocks.
+ *  Only valid after net_driver_select() has been called.
+ */
+int net_recv_nb(uint8_t *buf, uint32_t maxlen);
+
+/*
  *  int net_driver_select() prototype
  *
  *  Initialises net_drv with the requested driver ("slip" or "eth").

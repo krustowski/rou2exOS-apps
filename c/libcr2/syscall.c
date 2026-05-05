@@ -341,8 +341,14 @@ int64_t send_packet(uint8_t type, uint8_t *buffer) {
 }
 
 int64_t receive_data(uint8_t type, uint8_t *buffer) {
-    /* Returns the Ethernet frame length on success, 0 while blocked. */
+    /* Returns the Ethernet frame length on success; blocks until frame arrives. */
     return syscall(ScReceivePort, (int64_t)type, (int64_t)buffer, 0);
+}
+
+int64_t receive_data_nb(uint8_t type, uint8_t *buffer) {
+    /* Non-blocking: arg1=0 signals kernel to return 0 instead of blocking. */
+    (void)type;
+    return syscall(ScReceivePort, 0, (int64_t)buffer, 0);
 }
 
 int64_t send_data(uint8_t type, uint8_t *buffer) {

@@ -566,9 +566,17 @@ int64_t send_packet(uint8_t type, uint8_t *buffer);
 /*
  *  int64_t receive_data() prototype
  *
- *  Implementation of syscall 0x35.
+ *  Implementation of syscall 0x35. Blocks until a frame is available.
  */
 int64_t receive_data(uint8_t type, uint8_t *buffer);
+
+/*
+ *  int64_t receive_data_nb() prototype
+ *
+ *  Non-blocking variant of receive_data (arg3=1). Returns 0 immediately
+ *  when the queue is empty instead of blocking the calling process.
+ */
+int64_t receive_data_nb(uint8_t type, uint8_t *buffer);
 
 /*
  *  int64_t send_data() prototype

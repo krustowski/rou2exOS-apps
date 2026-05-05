@@ -216,6 +216,96 @@ static int eth_drv_recv(uint8_t *buf, uint32_t maxlen) {
     return 0;
 }
 
+/*
+ *  Non-blocking wrapper around eth_drv_recv.  Uses receive_data_nb so the
+ *  caller returns immediately with 0 if no Ethernet frame is queued, instead
+ *  of being suspended by the scheduler.  ARP/ICMP are still handled in-line
+ *  when a frame IS available; only TCP payloads are returned to the caller.
+ */
+static int eth_drv_recv_nb(uint8_t *buf, uint32_t maxlen) {
+    int64_t n = receive_data_nb(RECV_ETH, eth_drv_frame_buf);
+
+    if (n <= 0 || (uint32_t)n < ETH_HDR_LEN)
+        return 0;
+
+    const EthHdr_T *eth = (const EthHdr_T *)eth_drv_frame_buf;
+    uint16_t etype = htons(eth->ethertype);
+
+    if (etype == ETYPE_ARP) {
+        if ((uint32_t)n < ETH_HDR_LEN + ARP_PKT_LEN)
+            return 0;
+        const ArpPkt_T *arp = (const ArpPkt_T *)(eth_drv_frame_buf + ETH_HDR_LEN);
+        if (htons(arp->oper) == 1 && memcmp(arp->tpa, eth_my_ip, 4) == 0) {
+            eth_arp_cache_update(arp->spa, eth->src);
+            eth_send_arp_reply(eth, arp);
+        } else if (htons(arp->oper) == 2 && memcmp(arp->tha, eth_my_mac, 6) == 0) {
+            eth_arp_cache_update(arp->spa, eth->src);
+        }
+        return 0;
+    }
+
+    if (etype == ETYPE_IPV4) {
+        const uint8_t *ip_pkt = eth_drv_frame_buf + ETH_HDR_LEN;
+        uint32_t ip_len = (uint32_t)n - ETH_HDR_LEN;
+
+        Ipv4Header_T ipv4;
+        uint16_t ipv4_hdr_len = parse_ipv4_packet(ip_pkt, &ipv4);
+
+        if (!ipv4_hdr_len)
+            return 0;
+
+        eth_arp_cache_update(ipv4.source_addr, eth->src);
+
+        if (ipv4.protocol == 1) {
+            uint32_t ip_total = (uint32_t)htons(ipv4.total_length);
+            if (ip_total > ip_len || ip_total < (uint32_t)ipv4_hdr_len)
+                return 0;
+            uint32_t icmp_len = ip_total - ipv4_hdr_len;
+            const uint8_t *icmp = ip_pkt + ipv4_hdr_len;
+            if (icmp_len < 8 || icmp[0] != 8 || icmp[1] != 0)
+                return 0;
+            uint32_t frame_len = ETH_HDR_LEN + ip_total;
+            if (frame_len > 1514)
+                return 0;
+            uint8_t reply[1514];
+            EthHdr_T *reth = (EthHdr_T *)reply;
+            memcpy(reth->dst, eth->src, 6);
+            memcpy(reth->src, eth_my_mac, 6);
+            reth->ethertype = htons(ETYPE_IPV4);
+            uint8_t *rip = reply + ETH_HDR_LEN;
+            memcpy(rip, ip_pkt, ipv4_hdr_len);
+            Ipv4Header_T *rip_hdr = (Ipv4Header_T *)rip;
+            uint8_t tmp[4];
+            memcpy(tmp, rip_hdr->source_addr, 4);
+            memcpy(rip_hdr->source_addr, rip_hdr->destination_addr, 4);
+            memcpy(rip_hdr->destination_addr, tmp, 4);
+            rip_hdr->header_checksum = 0;
+            rip_hdr->header_checksum = htons(inet_cksum(rip, ipv4_hdr_len));
+            uint8_t *ricmp = rip + ipv4_hdr_len;
+            memcpy(ricmp, icmp, icmp_len);
+            ricmp[0] = 0; ricmp[2] = 0; ricmp[3] = 0;
+            uint16_t ck = inet_cksum(ricmp, icmp_len);
+            ricmp[2] = (uint8_t)(ck >> 8);
+            ricmp[3] = (uint8_t)(ck & 0xff);
+            send_eth_frame(reply, frame_len);
+            return 0;
+        }
+
+        uint32_t ip_total = (uint32_t)htons(ipv4.total_length);
+        if (ip_total > ip_len || ip_total < (uint32_t)ipv4_hdr_len)
+            return 0;
+        uint32_t copy_len = (ip_total < maxlen) ? ip_total : maxlen;
+        memcpy(buf, ip_pkt, copy_len);
+        return (int)copy_len;
+    }
+
+    return 0;
+}
+
+int net_recv_nb(uint8_t *buf, uint32_t maxlen) {
+    return eth_drv_recv_nb(buf, maxlen);
+}
+
 static void eth_drv_send(const uint8_t *ip_pkt, uint32_t len) {
     (void)len;
     Ipv4Header_T ipv4;
@@ -296,8 +386,15 @@ static void eth_drv_send(const uint8_t *ip_pkt, uint32_t len) {
     }
 
     uint8_t dst_mac[6];
-    if (!eth_arp_cache_lookup(hdr->destination_addr, dst_mac))
-        return;
+    int _arp_hit = eth_arp_cache_lookup(hdr->destination_addr, dst_mac);
+    if (!_arp_hit || memcmp(dst_mac, eth_my_mac, 6) == 0) {
+        /* ARP unresolved, OR resolved to our own MAC (the remote is on the
+         * same guest — e.g. Memento → chat server, both at 10.3.4.2).
+         * Using own_mac as dst would be L2-dropped by the host tap driver.
+         * Broadcast forces the host to receive the frame and route it back
+         * via ip_forward so the other process's RX queue gets it. */
+        for (int _i = 0; _i < 6; _i++) dst_mac[_i] = 0xFF;
+    }
 
     uint32_t frame_len = ETH_HDR_LEN + ip_total;
     uint8_t frame[1514];
@@ -530,7 +627,11 @@ uint32_t write(TcpSocket_T *sock, const uint8_t *buf, uint32_t len) {
 }
 
 void close(TcpSocket_T *sock) {
-    send_tcp_packet(sock, 0, 0, TCP_FLAG_FIN | TCP_FLAG_ACK);
+    if (sock->state == SOCKET_ESTABLISHED || sock->state == SOCKET_FIN_WAIT) {
+        send_tcp_packet(sock, 0, 0, TCP_FLAG_FIN | TCP_FLAG_ACK);
+    } else if (sock->state == SOCKET_SYN_SENT) {
+        send_tcp_packet(sock, 0, 0, TCP_FLAG_RST);
+    }
     free_socket(sock);
 }
 
@@ -566,6 +667,11 @@ void on_tcp_packet(const uint8_t src_ip[4], const uint8_t dst_ip[4], TcpHeader_T
 
             send_tcp_packet(new_conn, 0, 0, TCP_FLAG_SYN | TCP_FLAG_ACK);
             new_conn->seq_num = 1;
+            return;
+        }
+
+        if (s->state == SOCKET_SYN_SENT && (flags & TCP_FLAG_RST)) {
+            free_socket(s);
             return;
         }
 
