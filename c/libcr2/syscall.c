@@ -73,6 +73,18 @@ int64_t pipe_read(uint8_t *buffer) {
     return 1;
 }
 
+int64_t pipe_mouse_subscribe(void) {
+    return syscall(ScPipeSubscribe, 0x04, 0, 0) == 0 ? 1 : 0;
+}
+
+int64_t pipe_mouse_unsubscribe(void) {
+    return syscall(ScPipeSubscribe, 0x06, 0, 0) == 0 ? 1 : 0;
+}
+
+int64_t pipe_mouse_read(MousePacket_T *buf) {
+    return syscall(ScPipeSubscribe, 0x05, (int64_t)buf, 0);
+}
+
 int64_t print(const uint8_t *str) {
     int64_t len = 0;
     while (str[len])

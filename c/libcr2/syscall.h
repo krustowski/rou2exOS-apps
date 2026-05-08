@@ -271,6 +271,46 @@ int64_t pipe_unsubscribe(const uint8_t *buffer);
 int64_t pipe_read(uint8_t *buffer);
 
 /*
+ *  type MousePacket_T structure
+ *
+ *  One PS/2 mouse event as returned by pipe_mouse_read().
+ *  buttons: bit 0 = left, bit 1 = right, bit 2 = middle.
+ *  dx/dy:   signed pixel deltas.  dy is positive when the physical mouse moves up
+ *           (PS/2 convention); most UIs negate dy to get screen-space down = positive.
+ */
+typedef struct {
+    uint8_t buttons;
+    int8_t  dx;
+    int8_t  dy;
+} __attribute__((packed)) MousePacket_T;
+
+/*
+ *  int64_t pipe_mouse_subscribe() prototype
+ *
+ *  Implementation of syscall 0x03 (arg1 0x04).
+ *  Registers the calling process to receive PS/2 mouse packets.
+ *  Returns 0 on success, non-zero if the subscriber table is full.
+ */
+int64_t pipe_mouse_subscribe(void);
+
+/*
+ *  int64_t pipe_mouse_unsubscribe() prototype
+ *
+ *  Implementation of syscall 0x03 (arg1 0x06).
+ */
+int64_t pipe_mouse_unsubscribe(void);
+
+/*
+ *  int64_t pipe_mouse_read() prototype
+ *
+ *  Implementation of syscall 0x03 (arg1 0x05).
+ *  Drains up to 5 complete MousePacket_T entries from the kernel ring buffer
+ *  into buf.  Returns the number of bytes written (always a multiple of 3),
+ *  or 0 when no packets are available.
+ */
+int64_t pipe_mouse_read(MousePacket_T *buf);
+
+/*
  *  int64_t print() prototype
  *
  *  Implementation of syscall 0x10.
